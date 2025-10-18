@@ -6,12 +6,6 @@ local drives = {
 local currentDrive = "C"
 local currentPath = "/"
 
-local function setPath(drive, path)
-    currentDrive = drive
-    currentPath = path or "/"
-    shell.setDir(drives[currentDrive])
-end
-
 term.setBackgroundColor(colors.black)
 term.setTextColor(colors.white)
 term.clear()
@@ -23,16 +17,26 @@ print("HIMEM is testing extended memory...done.")
 sleep(1)
 print("")
 
+local function getAbsolutePath(relativePath)
+    return fs.combine(drives[currentDrive], fs.combine(currentPath, relativePath))
+end
+
 local function printPrompt()
-    term.write(currentDrive .. ":\\" .. shell.dir():gsub("^" .. drives[currentDrive], "") .. "> ")
+    local displayPath = currentPath:gsub("^/", ""):gsub("/", "\\")
+    if displayPath == "" then displayPath = "" end
+    term.write(currentDrive .. ":\\" .. displayPath .. "> ")
 end
 
 local function listDir(path)
-    local absPath = fs.combine(drives[currentDrive], path or "")
+    local absPath = getAbsolutePath(path or "")
+    if not fs.exists(absPath) then
+        print("Path not found")
+        return
+    end
     local files = fs.list(absPath)
     for _, file in ipairs(files) do
-        local fullPath = fs.combine(absPath, file)
-        if fs.isDir(fullPath) then
+        local full = fs.combine(absPath, file)
+        if fs.isDir(full) then
             print("<DIR>       " .. file)
         else
             print("            " .. file)
@@ -41,25 +45,44 @@ local function listDir(path)
 end
 
 local function changeDir(path)
-    if currentDrive == "A" then
-        print("Access denied: Cannot change directory on drive A:")
+    if not path then
+        print(currentPath)
         return
     end
-    local target = fs.combine(shell.dir(), path)
-    if fs.exists(target) and fs.isDir(target) then
-        shell.setDir(target)
+
+    local target
+    if path == ".." then
+        if currentPath == "/" then
+            print("Invalid directory")
+            return
+        end
+        target = fs.getDir(currentPath)
+        if target == "" then target = "/" end
+    else
+        target = fs.combine(currentPath, path)
+    end
+
+    -- Prevent access to /disk from C:\
+    if currentDrive == "C" and target:match("^disk") then
+        print("Invalid directory")
+        return
+    end
+
+    local absTarget = fs.combine(drives[currentDrive], target)
+    if fs.exists(absTarget) and fs.isDir(absTarget) then
+        currentPath = fs.combine("/", target)
     else
         print("Invalid directory")
     end
 end
 
-local function readFile(path)
-    local target = fs.combine(shell.dir(), path)
-    if not fs.exists(target) or fs.isDir(target) then
+local function readFile(filename)
+    local absPath = getAbsolutePath(filename)
+    if not fs.exists(absPath) or fs.isDir(absPath) then
         print("File not found")
         return
     end
-    local file = fs.open(target, "r")
+    local file = fs.open(absPath, "r")
     local line = file.readLine()
     while line do
         print(line)
@@ -85,13 +108,9 @@ while true do
         term.clear()
         term.setCursorPos(1,1)
     elseif cmd == "dir" then
-        listDir(shell.dir())
+        listDir(currentPath)
     elseif cmd == "cd" then
-        if arg1 then
-            changeDir(arg1)
-        else
-            print(shell.dir())
-        end
+        changeDir(arg1)
     elseif cmd == "type" then
         if arg1 then
             readFile(arg1)
@@ -101,13 +120,16 @@ while true do
     elseif cmd == "a:" or cmd == "c:" then
         local driveLetter = cmd:sub(1,1):upper()
         if fs.exists(drives[driveLetter]) then
-            setPath(driveLetter)
+            currentDrive = driveLetter
+            currentPath = "/"
         else
             print("Drive " .. driveLetter .. ": not ready")
         end
     elseif cmd ~= "" then
-        local resolved = shell.resolveProgram(cmd)
-        if resolved then
+        local absPath = getAbsolutePath(cmd)
+        if fs.exists(absPath) then
+            shell.run(absPath, table.unpack(args, 2))
+        elseif shell.resolveProgram(cmd) then
             shell.run(cmd, table.unpack(args, 2))
         else
             print("'" .. cmd .. "' is not recognized as an internal or external command.")
